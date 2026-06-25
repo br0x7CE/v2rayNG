@@ -83,12 +83,25 @@ jobs:
         distribution: 'temurin'
         java-version: '21'
 
-    - name: Decode Keystore
-      uses: timheuer/base64-to-file@v2.0.0
-      id: android_keystore
-      with:
-        fileName: "android_keystore.jks"
-        encodedString: ${{ secrets.APP_KEYSTORE_BASE64 }}
+    - name: Generate or Decode Keystore
+      id: keystore
+      run: |
+        if [ -z "${{ secrets.APP_KEYSTORE_BASE64 }}" ]; then
+          echo "No keystore secret found, generating temporary one..."
+          keytool -genkeypair -v -keystore keystore.jks -alias temp -keyalg RSA \
+            -keysize 2048 -validity 10000 -storepass android -keypass android \
+            -dname "CN=Temp, OU=Temp, O=Temp, L=Temp, ST=Temp, C=US"
+          echo "path=$(pwd)/keystore.jks" >> $GITHUB_OUTPUT
+          echo "storepass=android" >> $GITHUB_OUTPUT
+          echo "keypass=android" >> $GITHUB_OUTPUT
+          echo "alias=temp" >> $GITHUB_OUTPUT
+        else
+          echo "${{ secrets.APP_KEYSTORE_BASE64 }}" | base64 -d > keystore.jks
+          echo "path=$(pwd)/keystore.jks" >> $GITHUB_OUTPUT
+          echo "storepass=${{ secrets.APP_KEYSTORE_PASSWORD }}" >> $GITHUB_OUTPUT
+          echo "keypass=${{ secrets.APP_KEY_PASSWORD }}" >> $GITHUB_OUTPUT
+          echo "alias=${{ secrets.APP_KEYSTORE_ALIAS }}" >> $GITHUB_OUTPUT
+        fi
 
     - name: Build APK
       run: |
@@ -96,7 +109,11 @@ jobs:
         echo "sdk.dir=${ANDROID_HOME}" > local.properties
         chmod 755 gradlew
         ./gradlew licenseFdroidReleaseReport
-        ./gradlew assembleRelease -Pandroid.injected.signing.store.file=${{ steps.android_keystore.outputs.filePath }} -Pandroid.injected.signing.store.password=${{ secrets.APP_KEYSTORE_PASSWORD }} -Pandroid.injected.signing.key.alias=${{ secrets.APP_KEYSTORE_ALIAS }} -Pandroid.injected.signing.key.password=${{ secrets.APP_KEY_PASSWORD }}
+        ./gradlew assembleRelease \
+          -Pandroid.injected.signing.store.file=${{ steps.keystore.outputs.path }} \
+          -Pandroid.injected.signing.store.password=${{ steps.keystore.outputs.storepass }} \
+          -Pandroid.injected.signing.key.alias=${{ steps.keystore.outputs.alias }} \
+          -Pandroid.injected.signing.key.password=${{ steps.keystore.outputs.keypass }}
     
     - name: Upload arm64-v8a APK
       uses: actions/upload-artifact@v7
